@@ -1,0 +1,13 @@
+; $Id: qbwc.info,v 1.2 2009/01/20 04:05:14 vauxia Exp $
+name = Web Connector
+description = Implements a Quickbooks Web Connector server, which can be used to securely transfer your data between Drupal and Quickbooks.
+core = 6.x
+dependencies[] = qb
+package = Accounting
+
+; Information added by drupal.org packaging script on 2009-08-03
+version = "6.x-1.x-dev"
+core = "6.x"
+project = "qb"
+datestamp = "1249258978"
+

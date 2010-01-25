@@ -1,0 +1,432 @@
+<?php // $Id: qb_field.module,v 1.2 2009/02/19 05:32:04 vauxia Exp $
+
+
+/**
+ * Implementation of hook_elements().
+ */
+function qb_field_elements() {
+  return array(
+  );
+}
+
+/**
+ * Implementation of hook_field_info().
+ */
+function qb_field_field_info() {
+  return array(
+    'qb_data' => array(
+      'label' => 'Quickbooks record',
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function qb_field_form_alter(&$form, $form_state, $form_id) {
+  if (isset($form['#field']) && $form['#field']['type'] == 'qb_data') {
+    array_unshift($form['#submit'], '_qb_field_query_save');
+    array_unshift($form['#submit'], '_qb_field_create_fields');
+  }
+}
+
+/**
+ * Implementation of a submit hook for the field settings form.
+ * We're actually storing the query definition in the QB Data module, so
+ * account for it there.
+ */
+function _qb_field_query_save(&$form, &$form_state) {
+  $query = NULL;
+  if ($qdid = $form_state['values']['qdid']) $query = qb_data_query_load($qdid);
+  $edit = array(
+    'title' => $form_state['values']['label'],
+    'status' => 1,
+    'qb_qry' => $form_state['values']['qb_qry'],
+    'qb_mod' => $form_state['values']['qb_mod'],
+    'qb_add' => $form_state['values']['qb_add'],
+    'qb_datatype' => '', // TODO
+    'min_timestamp' => '', // TODO
+    'frequency' => 0,
+    'callbacks' => 'qb_field_qbwc_map',
+  );
+  if (isset($form_state['values']['request'])) {
+    $edit['request'] = $form_state['values']['request'];
+  }
+  $query = qb_data_query_save($query, $edit);
+  $form_state['values']['qdid'] = $query->qdid;
+}
+
+/**
+ * Implementation of hook_field_settings().
+ */
+function qb_field_field_settings($op, &$field) {
+  module_load_include('inc', 'qb_data', 'includes/qb_data.admin');
+  switch ($op) {
+    case 'form':
+      $form = array();
+
+      if ($field['type'] == 'qb_data') {
+        // One id per customer, please.
+        $form['multiple'] = array('#type' => 'value', '#value' => 0);
+
+        // Create a new, default qb_data query for this field.
+        if ($field['qdid']) {
+          $query = qb_data_query_load($field['qdid']);
+          $form['qdid'] = array('#type' => 'value', '#value' => $query->qdid);
+        }
+
+        if (!$query->request) {
+          $form['request'] = array(
+            '#type' => 'select',
+            '#title' => t('Quickbooks record type'),
+            '#multiple' => FALSE,
+            '#options' => qb_data_available_queries(),
+            '#default_value' => $query->request,
+          );
+        }
+
+        // Build a field mapping form.
+        $form['qb_map'] = array();
+        $form['qb_map'] = _qb_field_map_form($field, $query);
+
+        $form['unique'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Unique values'),
+          '#description' => t('Ensure that each Quickbooks record is mapped to only one node at a time.  This is highly recommended if you are mapping Quickbooks data to content fields.'),
+          '#default_value' => isset($field['unique']) ? $field['unique'] : 1,
+        );
+
+        $form['qb_qry'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Import Quickbooks records'),
+          '#description' => t('When new records are added to Quickbooks, automatically add the corresponding nodes on this site during the next update.'),
+          '#default_value' => $query->qb_qry,
+        );
+
+        $form['qb_add'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Export Drupal records'),
+          '#description' => t('When a new node is created on this site, export it to Quickbooks during the next update.'),
+          '#default_value' => $query->qb_add,
+        );
+
+        $form['qb_mod'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Update Quickbooks when Drupal records change'),
+          '#description' => t('Export Drupal changes to Quickbooks.'),
+          '#default_value' => $query->qb_mod,
+        );
+
+        $form['truth_copy'] = array(
+          '#type' => 'select',
+          '#title' => t('If there is a conflict'),
+          '#options' => array('quickbooks' => t('Quickbooks wins'), 'drupal' => t('Drupal wins'), 'none' => t('Do not update')),
+        );
+      }
+
+      return $form;
+
+    case 'validate':
+      break;
+
+    case 'save':
+      // Return the values we want saved back to the field.
+      return array('qdid', 'unique', 'truth_copy', 'qb_map', 'request');
+
+    case 'database columns':
+      return array( 'qdvid' => array('type' => 'int', 'unsigned' => TRUE) );
+  }
+}
+
+/**
+ * Implementation of hook_field().
+ */
+function qb_field_field($op, &$node, $field, &$items, $teaser, $page) {
+  switch ($op) {
+    case 'presave':
+      foreach ($items as $i => $item) {
+        if (qb_field_content_is_empty($item, $field)) continue;
+        $save = TRUE;
+
+        // Create or update a qb_data value and set it to "pending".
+        $edit = array(
+          'status' => $node->status,
+          'qb_name' => $node->title, // TODO configurable.
+          'qb_txn_number' => $node->nid, // TODO configurable.
+        );
+        if ($item['qdvid'] != 0) {
+          $value = qb_data_value_load($item['qdvid']);
+
+          // Assume this is an import if it's a new node with an existing id.
+          if (!$node->nid) $save = FALSE;
+        }
+        if ($save) qb_data_value_save($value, $edit);
+
+        // Make sure our value ID is saved properly.
+        $items[$i]['qdvid'] = $value->qdvid;
+      }
+      return;
+  }
+}
+
+/**
+ * Implementation of hook_field_content_is_empty().
+ */
+function qb_field_content_is_empty($item, $field) {
+  return (strlen($item['qdvid']) == 0);
+}
+
+/**
+ * Implementation of hook_widget_info().
+ */
+function qb_field_widget_info() {
+  return array(
+    'qb_select' => array(
+      'label' => t('Select list'),
+      'field types' => array('qb_data'),
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_widget().
+ */
+function qb_field_widget(&$form, &$form_state, $field, $items, $delta = 0) {
+  $element = array(
+    '#field' => $field,
+    '#type' => $field['widget']['type'],
+    '#default_value' => isset($items[$delta]) ? $items[$delta] : NULL,
+  );
+  $element = array(
+    '#columns' => array('qdvid'),
+    'qdvid' => array(
+      '#type' => 'textfield',
+      '#default_value' => $items[$delta]['qdvid'],
+      '#input' => TRUE,
+    ),
+  );
+  return $element;
+}
+
+function _qb_field_map_value(&$node, $field_name, $token, $data) {
+  if (is_array($token)) {
+    foreach($token as $col => $tok) {
+      if ($tok && isset($data[$tok])) {
+        if (!is_array($data[$tok])) $data[$tok] = array($data[$tok]);
+        foreach ($data[$tok] as $delta => $value) {
+          $node->{$field_name}[$delta][$col] = $value;
+        }
+      }
+    }
+  }
+  else {
+    if ($token && isset($data[$token])) $node->$field_name = $data[$token];
+  }
+}
+
+/** 
+ * Implementation of hook_qb_data_request_alter().
+ * Synchronize Drupal and Quickbooks data.
+ */
+function qb_field_qb_data_request_alter(&$request) {
+  $op = $request['data']['op'];
+  $query = $request['data']['qb_query'];
+
+  foreach (qb_field_list() as $field) {
+    if ($field['qdid'] == $query->qdid) {
+
+      // Attach our field mapping callback so we can handle the response.
+      $request['callback'][] = 'qb_field_qbwc_response';
+      $request['data']['field'] = $field;
+
+      // Augment the request values with our own.
+      if (isset($request['data']['qb_data_value'])) {
+        $value = $request['data']['qb_data_value'];
+        qb_field_set_request($request['request'], $value, $field);
+      }
+    }
+  }
+}
+
+function qb_field_set_request(&$request, $value, $field) {
+  $node = _qb_field_node_load($field, $value);
+  $key = key($request);
+  foreach ($fields['qb_map'] as $content_field => $qb_field) {
+    if ($qb_field) {
+      // TODO hard-coded reference to 'value'!
+      $request[$key][$qb_field] = $node->$content_field[0]['value'];
+    }
+  }
+}
+
+/** 
+ * Callback for a qbwc query response.
+ * Synchronize Drupal and Quickbooks data.
+ * The result values have already been tracked by qb_data_qbwc_response.
+ */
+function qb_field_qbwc_response($result, &$data, $status, $message) {
+  global $user;
+  module_load_include('inc', 'node', 'node.pages');
+  $field = $data['field'];
+  $type = $field['type_name'];
+
+  foreach ($result as $r) {
+    $value = $r['value'];
+
+    switch ($data['op']) {
+
+      // The result of a Query request is a new or modified QB value.
+      case 'qry':
+        if (!$r['new'] || $r['modified']) continue;
+
+        // Record was modified: re-map and re-save values.
+        if ($r['modified']) {
+          $node = _qb_field_node_load($field, $value);
+        }
+
+        // Record was newly-added: bake up a corresponding node.
+        elseif ($r['new']) {
+          $node = (object) array( 'type' => $type );
+          $values = array();
+          $values[$field['field_name']] = array(array('qdvid' => $value->qdvid));
+          $values['title'] = $r['Name']; // TODO hard-coded.
+        }
+
+        foreach ($r as $qb_name => $qb_value) {
+          if ($field['qb_map']) {
+            if ($content_field = array_search($qb_name, $field['qb_map'])) {
+              //TODO hard-coded "value" key
+              $values[$content_field] = array(array('value' => $qb_value));
+            }
+          }
+        }
+
+        $values['op'] = t('Save');
+        $values['name'] = $user->name;
+        $form_state = array( 'values' => $values );
+        drupal_execute($type .'_node_form', $form_state, $node);
+
+        break;
+
+      // The result of an Add or Modify request is the resulting record.
+      case 'add':
+      case 'mod':
+        break;
+    }
+  }
+}
+
+function _qb_field_map_form($field, $query) {
+  if (!$query) return;
+
+  // Query responses are consistenly named. This gives us a list of values.
+  $queries = qb_qbxml_queries();
+  $qb_data = current($queries[$query->request.'QueryRs']);
+
+  $form = array(
+    '#type' => 'fieldset',
+    '#title' => t('Quickbooks mappings'),
+    '#collapsible' => FALSE,
+    '#tree' => TRUE,
+  );
+
+  if (!$values = $field['qb_map']) {
+    $values = array();
+  }
+
+  foreach ($qb_data as $qb_key => $qb_info) {
+    if (!is_string($qb_key)) continue;
+    if (substr($qb_key, -4) == 'Core') continue; // ListCore, TxnCore, etc.
+    if (in_array($qb_key, array('FullName', 'TxnID'))) continue; 
+
+    // "Ref" fields.
+    if (substr($qb_key, -3) == 'Ref') {
+    }
+
+    else {
+      $label = preg_replace('/([A-Z]+)/', ' \1', $qb_key);
+      $type = _qb_field_map_field($qb_info);
+      $qb_fields[$type][$qb_key] = $label;
+		}
+  }
+
+  foreach ($qb_fields as $type => $items) {
+    sort($items);
+    $qb_fields[$type] = array_merge(array('' => t('Quickbooks field')), $items);
+  }
+
+  foreach (content_fields() as $cf) {
+    if (!isset($qb_fields[$cf['type']])) continue;
+    $form[$cf['field_name']] = array(
+      '#type' => 'select',
+      '#title' => $cf['widget']['label'],
+      '#options' =>  $qb_fields[$cf['type']],
+      '#default_value' => $values[$cf['field_name']],
+    );
+  }
+
+  return $form;
+}
+
+function _qb_field_map_field($qb_info) {
+  $label = preg_replace('/([A-Z]+)/', ' \1', $name);
+
+  if (isset($qb_info['type'])) {
+    switch ($qb_info['type']) {
+      case 'STRTYPE':
+      case 'ENUMTYPE':
+        $field_type = 'text';
+        break;
+
+      case 'AMTTYPE':
+      case 'PRICETYPE':
+      case 'FLOATTYPE':
+      case 'QUANTYPE':
+      case 'PERCENTTYPE':
+        $field_type = 'number_float';
+        break;
+
+      case 'INTTYPE':
+      case 'BOOLTYPE':
+        $field_type = 'number_integer';
+        break;
+
+      case 'DATETYPE':
+      case 'DATETIMETYPE':
+        break;
+    }
+  /* Not addressing:
+    IDTYPE -- nodereference?
+    TIMEINTERVALTYPE
+    GUIDTYPE
+    UUIDTYPE
+    MACROTYPE
+  */
+    return $field_type;
+  }
+}
+
+function _qb_field_node_load($field, $value) {
+  $db_info = content_database_info($fields);
+  $nid = db_result(db_query("SELECT nid FROM {". $db_info['table'] ."}
+    WHERE %s = %d", $field['field_name'] .'_qdvid', $value->qdvid));
+
+  return node_load($nid);
+}
+
+function qb_field_list($request = NULL) {
+  static $qb_fields;
+  if (!isset($qb_fields)) {
+    $qb_fields = array();
+    foreach (content_fields() as $field) {
+      if ($field['type'] == 'qb_data') $qb_fields[] = $field;
+    }
+  }
+  $ret = $qb_fields;
+  if (isset($request)) {
+    foreach ($ret as $k => $field) {
+      if ($field['request'] != $request) unset($ret[$k]);
+    }
+  }
+  return $ret;
+}

@@ -1,0 +1,135 @@
+<?php // $Id: qb_data.module,v 1.4 2009/02/19 05:29:36 vauxia Exp $
+
+/**
+ * Implementation of hook_menu().
+ */
+function qb_data_menu() {
+  return array(
+    'admin/settings/qb/data' => array(
+      'title' => t('Data'),
+      'page callback' => 'qb_data_admin_overview',
+      'access arguments' => array('administer quickbooks'),
+      'type' => MENU_LOCAL_TASK,
+      'file' => 'qb_data.admin.inc',
+      'file path' => drupal_get_path('module', 'qb_data') .'/includes',
+    ),
+    'admin/settings/qb/data/%' => array(
+      'title' => t('Data integration'),
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('qb_data_admin_form', 4),
+      'access arguments' => array('administer quickbooks'),
+      'type' => MENU_CALLBACK,
+      'file' => 'qb_data.admin.inc',
+      'file path' => drupal_get_path('module', 'qb_data') .'/includes',
+    ),
+  );
+}
+
+/**
+ * Implementation of Quickbooks Webconnector Module's hook_qbwc_request().
+ */
+function qb_data_qbwc_request() {
+  $args = func_get_args();
+  module_load_include('inc', 'qb_data', 'includes/qb_data.wc');
+  return call_user_func_array('_qb_data_qbwc_request', $args);
+}
+
+/**
+ * Implementation of a callback for Web Connector responses.
+ */
+function qb_data_qbwc_response(&$result, &$data, $status, $message) {
+  module_load_include('inc', 'qb_data', 'includes/qb_data.wc');
+  return _qb_data_qbwc_response($result, $data, $status, $message);
+}
+
+/**
+ * Load a quickbooks value.
+ */
+function qb_data_value_load($qdvid) {
+  return db_fetch_object(db_query("SELECT * FROM {qb_data_value} 
+    WHERE qdvid = %d", $qdvid));
+}
+
+/**
+ * Validate a quickbooks value.
+ */
+function qb_data_value_validate($value, $edit) {
+  $query = qb_data_query_load($value->qdid);
+  
+  // "Add" not permitted, so we require an existing value.
+  if (!$query->qb_add && !$value->qvid) {
+    return FALSE;
+  }
+
+  // TODO ...?
+}
+
+/**
+ * Update a quickbooks value.
+ */
+function qb_data_value_save(&$value, $edit) {
+  // TODO don't save something if the query doesn't support mod or add!
+
+  // Only allow certain values: The rest is always controlled by Quickbooks.
+  $editable = array('status', 'qb_status', 'qb_name', 'qb_txn_number');
+  foreach ($edit as $key => $val) {
+    if (!in_array($key, $editable)) unset($edit[$key]);
+  }
+  if (isset($value->qdvid)) $edit['qdvid'] = $value->qdvid;
+
+  // Make it known that this value should be included in the next update.
+  if (is_null($edit['pending'])) $edit['pending'] = 1;
+
+  $update = isset($value->qdvid) ? 'qdvid' : NULL;
+  drupal_write_record('qb_data_value', $edit, $update );
+  $value = (object) $edit;
+}
+
+/**
+ * Change the Drupal status, which will prevent it from appearing in most 
+ * queries.  This is different from qb_status, which must be manually changed
+ * in order for Quickbooks to set it to inactive.
+ */
+function qb_data_value_deactivate($value) {
+  $value->status = 0;
+  qb_data_save($value);
+}
+
+/**
+ * List all values we have created and/or imported from Quickbooks.
+ */
+function qb_data_values($qdid, $active_only = TRUE, $pending_only = FALSE) {
+  $values = array();
+  $where = array();
+
+  $sql = "SELECT * FROM {qb_data_value} WHERE qdid = %d";
+  if ($active_only) $sql .= " AND status = 1";
+  if ($pending_only) $sql .= " AND pending = 1";
+  $sql .= " ORDER by qb_name";
+
+  $res = db_query($sql, $qdid);
+  while ($row = db_fetch_object($res)) $values[$row->qdvid] = $row;
+  return $values;
+}
+
+/**
+ * List all values from Quickbooks in a handy name/value array format.
+ */
+function qb_data_values_array($qdid) {
+  static $values = array();
+  if (!isset($values[$qdid])) {
+    $values[$qdid] = array();
+    foreach (qb_data_values($qdid) as $qdvid => $info) {
+      $values[$qdid][$qdvid] = $info->qb_full_name;
+    }
+  }
+  return $values[$qdid];
+}
+
+/**
+ * Return the value of an individual record.
+ */
+function qb_data_value($qdvid) {
+  return(db_fetch_object(db_query("SELECT * 
+    FROM {qb_data_value} WHERE qdvid = %d ", $qdvid)));
+}

@@ -1,0 +1,162 @@
+<?php // $Id: qb_user.module,v 1.2 2009/02/19 05:30:47 vauxia Exp $
+
+/**
+ * Implementation of hook_menu().
+ */
+function qb_user_menu() {
+  return array(
+    'admin/settings/qb/user' => array(
+      'title' => t('Users'),
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('qb_user_admin_form'),
+      'access arguments' => array('administer quickbooks'),
+      'type' => MENU_LOCAL_TASK,
+      'file' => 'qb_user.admin.inc',
+      'file path' => drupal_get_path('module', 'qb_user') .'/includes',
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_user().
+ */
+function qb_user_user($op, &$edit, &$account, $category = NULL) {
+  if (!$account->uid) return;
+
+  // Process users based on the qb_user_enable setting.
+  switch($map = variable_get('qb_user_enable', 'none')) {
+    case 'all':
+      break;
+
+    case 'role':
+      $roles = variable_get('qb_user_roles', array());
+      break;
+
+    default:
+      return;
+  }
+
+  switch ($op) {
+    case 'load':
+      // Add the user's data mappings, if available.
+      $res = db_query("SELECT qdvid FROM {qb_user} WHERE uid = %d", $account->uid);
+      while ($qdvid = db_result($res)) {
+        $type = db_result(db_query("SELECT d.request FROM {qb_data_value} v
+          INNER JOIN {qb_data} d USING ( qdid ) WHERE v.qdvid = %d", $qdvid));
+        if (!isset($account->qb_user)) $account->qb_user = array();
+        $account->qb_user[strtolower($type)] = $qdvid;
+      }
+      return;
+
+    case 'insert':
+    case 'update':
+      // Attempt to map this user to imported quickbooks entries.
+      if ($account->status) {
+        $res = db_query("SELECT qdvid FROM {qb_user}
+          WHERE uid = 0 AND mail = '%s'", $edit['mail']);
+
+        while ($qdvid = db_result($res)) {
+          if (!isset($account->qb_user)) $account->qb_user = array();
+          $account->qb_user[] = $qdvid;
+
+          // TODO augment user roles if the settings are applicable.
+        }
+      }
+
+      // If eligible, Set this account as pending in the qb_data queue.
+      return;
+
+    case 'after_update':
+      // Save any resulting changes to the qb_user table.
+      if (isset($account->qb_user)) {
+        foreach (array_unique($account->qb_user) as $qdvid) {
+          $qb_user = array(
+            'qdvid' => $qdvid,
+            'uid' => $account->uid,
+            'mail' => $account->mail
+          );
+          drupal_write_record('qb_user', $qb_user, 'qdvid');
+        }
+      }
+      return;
+
+    case 'delete':
+      db_query("DELETE FROM {qb_user} WHERE uid = %d", $account->uid);
+      return;
+
+    case 'form':
+      return;
+  }
+}
+
+/** 
+ * Implementation of hook_qb_data_request_alter().
+ * Add a callback that will synchronize users.
+ */
+function qb_user_qb_data_request_alter(&$request) {
+  module_load_include('inc', 'qb_user', 'includes/qb_user.admin');
+
+  $query = $request['data']['qb_query'];
+  foreach (_qb_user_qb_contact_types() as $name => $info) {
+    $settings = variable_get('qb_user_'. $name, array());
+    if (isset($settings['qdid']) && ($settings['qdid'] == $query->qdid)) {
+      $request['callback'][] = 'qb_user_qbwc_response';
+    }
+  }
+}
+
+/** 
+ * Implementation of a query response function.
+ */
+function qb_user_qbwc_response($result, &$data, $status, $message) {
+  foreach ($result as $r) {
+
+    $value = $r['value'];
+    $edit = array('qdvid' => $value->qdvid, 'mail' => $r['Email']);
+    switch ($data['op']) {
+      case 'qry':
+        watchdog('cron', print_r($r,true), array(), WATCHDOG_WARNING);
+        if ($r['modified']) {
+          $account = user_load(db_result(db_query("SELECT uid FROM {qb_user} 
+            WHERE qdvid = %d", $value->qdvid)));
+          // TODO re-map values via profile.
+
+          if ($edit['mail'] != $account->mail) {
+            $account->mail = $edit['mail'];
+            drupal_write_record('qb_user', $edit, 'qdvid');
+          }
+        }
+        elseif ($r['new']) {
+          $mode = variable_get('qb_user_import_mode', '');
+          $update = NULL;
+
+          // Attempt to match this record to an unmatched, existing user.
+          if ($uid = db_result(db_query("SELECT uid FROM {users} u
+            LEFT JOIN {qb_user} qb USING ( uid )
+            WHERE u.mail = '%s' AND qb.qdvid IS NULL", $edit['mail']))) {
+
+            $edit['uid'] = $uid;
+          }
+          elseif ($mode == 'add') {
+            //TODO add new user.
+
+          }
+          elseif ($mode == 'match') {
+            // Save this entry for later.  If a user with the same address
+            // registers, the record will be linked via hook_user.
+            $edit['uid'] = 0;
+          }
+
+          // Save the resulting entry.
+          drupal_write_record('qb_user', $edit, $update);
+        }
+        break;
+
+      case 'add':
+        break;
+
+      case 'mod':
+        break;
+    }
+  }
+}

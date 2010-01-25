@@ -1,0 +1,43 @@
+<?php // $Id: qb_user.install,v 1.1 2009/02/17 20:43:05 vauxia Exp $
+
+/**
+ * @file
+ * Installation and update file for Quickbooks user storage.
+ *
+ */
+
+/**
+ * Implementation of hook_schema().
+ */
+function qb_user_schema() {
+  $schema = array();
+  $schema['qb_user'] = array(
+    'fields' => array(
+      'qdvid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'uid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'mail' => array(
+        'type' => 'varchar',
+        'length' => 64,
+      ),
+    ),
+    'primary key' => array('qdvid', 'uid'),
+  );
+  return $schema;
+}
+
+function qb_user_install() {
+  drupal_install_schema('qb_user');
+}
+
+function qb_user_uninstall() {
+  drupal_uninstall_schema('qb_user');
+}

@@ -1,0 +1,13 @@
+; $Id: qb_user.info,v 1.1 2009/02/17 20:43:05 vauxia Exp $
+name = Quickbooks user integration
+description = Synchronize Customers, Employees or Vendor contacts from Quickbooks to your Drupal site.
+core = 6.x
+package = Accounting
+dependencies[] = qb_data
+
+; Information added by drupal.org packaging script on 2009-08-03
+version = "6.x-1.x-dev"
+core = "6.x"
+project = "qb"
+datestamp = "1249258978"
+

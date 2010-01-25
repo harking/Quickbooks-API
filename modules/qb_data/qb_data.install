@@ -1,0 +1,169 @@
+<?php // $Id: qb_data.install,v 1.2 2009/02/08 03:53:49 vauxia Exp $
+
+/**
+ * @file
+ * Installation and update file for Quickbooks data storage.
+ *
+ */
+
+/**
+ * Implementation of hook_schema().
+ */
+function qb_data_schema() {
+  $schema = array();
+  $schema['qb_data'] = array(
+    'fields' => array(
+      'qdid' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'title' => array(
+        'type' => 'varchar',
+        'length' => '255',
+        'not null' => FALSE,
+        'default' => '',
+      ),
+      'status' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 1,
+      ),
+      'min_timestamp' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+      ),
+      'request' => array(
+        'type' => 'varchar',
+        'length' => '100',
+      ),
+      'qb_qry' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 1,
+      ),
+      'qb_add' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'qb_mod' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'qb_datatype' => array(
+        'type' => 'varchar',
+        'length' => 20,
+      ),
+      'frequency' => array(
+        'type' => 'int',
+      ),
+      'lastrun' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'lastmod' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'callbacks' => array(
+        'type' => 'varchar',
+        'length' => 255,
+      ),
+      'options' => array(
+        'type' => 'text',
+        'default' => NULL,
+        'serialize' => TRUE,
+      ),
+    ),
+    'primary key' => array('qdid'),
+  );
+
+  $schema['qb_data_value'] = array(
+    'fields' => array(
+      'qdvid' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'qdid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'status' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 1,
+      ),
+      'pending' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 1,
+      ),
+      'error' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'qb_status' => array(
+        'type' => 'int',
+        'size' => 'tiny',
+      ),
+      'qb_list_id' => array(
+        'type' => 'varchar',
+        'length' => 36,
+      ),
+      'qb_full_name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+      ),
+      'qb_name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'qb_txn_id' => array(
+        'type' => 'varchar',
+        'length' => 36,
+      ),
+      'qb_txn_number' => array(
+        'type' => 'int',
+      ),
+      'qb_edit_sequence' => array(
+        'type' => 'varchar',
+        'length' => '16',
+        'not null' => FALSE,
+      ),
+      'updated' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+    ),
+    'primary key' => array('qdvid'),
+    'unique keys' => array(
+      'name' => array('qdid', 'qb_list_id')
+    ),
+  );
+
+  return $schema;
+}
+
+function qb_data_install() {
+  drupal_install_schema('qb_data');
+}
+
+function qb_data_uninstall() {
+  drupal_uninstall_schema('qb_data');
+}

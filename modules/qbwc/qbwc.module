@@ -1,0 +1,105 @@
+<?php // $Id: qbwc.module,v 1.6 2009/02/03 21:31:26 vauxia Exp $
+
+/**
+ * Implementation of hook_menu().
+ */
+function qbwc_menu() {
+  $items = array();
+
+  $items['qbwc'] = array(
+    'title' => t('Quickbooks Web Connector'),
+    'page callback' => 'qbwc',
+    'access arguments' => array('access qbwc'),
+    'type' => MENU_CALLBACK,
+    'file' => 'qbwc.inc',
+  );
+  $items['admin/settings/qb/qwc'] = array(
+    'title' => t('QWC File'),
+    'page callback' => 'qbwc_qwc',
+    'access arguments' => array('access qbwc'),
+    'type' => MENU_CALLBACK,
+    'file' => 'qbwc.admin.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * Implementation of hook_perm().
+ */
+function qbwc_perm() {
+  return array('access qbwc');
+}
+
+/**
+ * Implementation of hook_form_alter().
+ * Add QBWC settings to the Quickbooks settings page.
+ */
+function qbwc_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'qb_settings') {
+    module_load_include('inc', 'qbwc', 'qbwc.admin');
+
+    $form['qbwc'] = qbwc_admin_form();
+    $form['qbwc']['#title'] = t('Web Connector settings');
+    $form['qbwc']['#type'] = 'fieldset'; 
+    $form['qbwc']['#collapsible'] = TRUE; 
+  }
+}
+
+/**
+ * API function to register an error.
+ */
+function qbwc_error($message = NULL, $substitutions = array()) {
+  if (!$errors = qbwc_get('_errors')) $errors = array();
+  if ($message) {
+    $errors[] = t($message, $substitutions);
+    qbwc_set('_errors', $errors);
+  }
+  return $errors;
+}
+
+/**
+ * API function to add a request to the Web Connector request queue.
+ */
+function qbwc_request_queue($request = array(), $reset = FALSE) {
+  if (!$requests = qbwc_get('request_queue')) $requests = array();
+
+  if ($reset) {
+    qbwc_set('request_queue', array());
+    qbwc_set('requests_done', (int)qbwc_get('requests_done')+count($requests));
+  }
+  elseif ($request) {
+    $request_id = (int) qbwc_get('request_id');
+    $requests[++$request_id] = $request;
+
+    qbwc_set('request_queue', $requests);
+    qbwc_set('request_id', $request_id);
+  }
+
+  // There's no value supplied, the caller must want the whole array back!
+  if (!$request) return $requests;
+}
+
+/**
+ * API function to set a variable in the qbwc session.
+ */
+function qbwc_set($name, $value = NULL) {
+  if (isset($_SESSION['qbwc'])) {
+    if (is_null($value)) { 
+      unset($_SESSION['qbwc'][$name]);
+    }
+    else {
+      $_SESSION['qbwc'][$name] = $value;
+    }
+  }
+  return $_SESSION['qbwc'][$name];
+}
+
+/**
+ * API function to get a variable from the qbwc session.
+ */
+function qbwc_get($name) {
+  if (isset($_SESSION['qbwc'])) {
+    return $_SESSION['qbwc'][$name];
+  }
+}

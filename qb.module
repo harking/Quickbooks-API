@@ -1,0 +1,134 @@
+<?php // $Id: qb.module,v 1.6 2009/02/19 05:28:21 vauxia Exp $
+
+/**
+ * @file
+ * An API to integrate your Drupal data with Quickbooks data.
+ *
+ */
+
+define('QB_VERSION_DEFAULT', '7.0');
+
+function qb_menu() {
+  return array(
+    'admin/settings/qb' => array(
+      'title' => t('Quickbooks'),
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('qb_settings'),
+      'access arguments' => array('administer quickbooks'),
+      'file' => 'qb.inc',
+      'type' => MENU_NORMAL_ITEM,
+    ),
+    'admin/settings/qb/api' => array(
+      'title' => t('API Settings'),
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('qb_settings'),
+      'access arguments' => array('administer quickbooks'),
+      'file' => 'qb.inc',
+      'weight' => 10,
+      'type' => MENU_DEFAULT_LOCAL_TASK,
+    ),
+  );
+}
+
+function qb_perm() {
+  return array('administer quickbooks');
+}
+
+function qb_qbxml_queries() {
+  // Load the file containing request and element data, based on API version.
+  $file = 'qbxml.'. variable_get('qb_version', QB_VERSION_DEFAULT);
+  module_load_include('inc', 'qb', 'includes/qbxml/'. $file);
+
+  // Return the system-generated values.
+  return _qb_qbxml_queries();
+}
+
+function qb_qbxml($elements, $root = array('QBXML')) {
+  $qbxml = $xml = new DOMDocument('1.0');
+
+  // Make sure the root is an array so _qb_qbxml_node can process it properly
+  if (!is_array($root)) {
+    $root = array($root => array());
+  }
+
+  // Attach the base/common root of the document
+  $start = _qb_qbxml_node($qbxml, key($root), current($root), $xml);
+
+  // Attach the rest of the document
+  foreach ((array) $elements as $key => $element) {
+    _qb_qbxml_node($qbxml, $key, $element, $start);
+  }
+  return $qbxml->saveXML();
+}
+
+function _qb_qbxml_node(&$doc, $name, $value, &$parent) {
+  // Store the elements in the order they were added to the doc
+  static $added;
+
+  if (is_scalar($value)) {
+    $element = $doc->createElement($name, $value);
+    $parent->appendChild($element);
+  }
+  elseif (is_array($value)) {
+    if (is_numeric(key($value))) {
+      for ($k = 0; $v = $value[$k]; $k++) {
+        _qb_qbxml_node($doc, $name, $v, $parent);
+      }
+    }
+    else {
+      $element = $doc->createElement($name);
+      foreach ($value as $k => $v) {
+        // Denote processing instructions with a "?".
+        if (is_scalar($v) && $k[0] == '?') {
+          $k = drupal_substr($k, 1);
+          $doc->appendChild($doc->createProcessingInstruction($k, $v));
+        }
+        // Denote attributes as starting with a "_".
+        elseif (is_scalar($v) && $k[0] == '_') {
+          $k = drupal_substr($k, 1);
+          $attr = $doc->createAttribute($k);
+          $attr->appendChild($doc->createTextNode($v));
+          $element->appendChild($attr);
+        }
+        else {
+          _qb_qbxml_node($doc, $k, $v, $element);
+        }
+      }
+      $added[] = $parent->appendChild($element);
+    }
+  }
+
+  // Try and return the last added element (first in the array because of recursion) to help have a more complex "root" as specified in qb_qbxml
+  return reset($added);
+}
+
+function qb_array($xml) {
+  $ret = array();
+  if($xml->nodeType == XML_TEXT_NODE) { 
+    return $xml->nodeValue; 
+  } 
+
+  if($xml->hasAttributes()) { 
+    foreach ($xml->attributes as $a) {
+      $ret['_'.$a->name] = $a->value; 
+    } 
+  }
+  if($xml->hasChildNodes()){ 
+    foreach ($xml->childNodes as $child) {
+      if (!$value = qb_array($child)) continue;
+      if (($name = $child->nodeName) == '#text') {
+        if (strlen($val = trim($child->nodeValue))) $ret[] = $val;
+      }
+      else {
+        if(!isset($ret[$name])) {
+          $ret[$name] = $value;
+        }
+        else {
+          $ret[$name] = array_merge(array($ret[$name]), array($value));
+        }
+      }
+    } 
+    if (count($ret) == 1) $ret = $ret[0];
+  } 
+  return $ret; 
+}

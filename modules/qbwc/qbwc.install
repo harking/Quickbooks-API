@@ -1,0 +1,67 @@
+<?php // $Id: qbwc.install,v 1.3 2009/02/02 20:36:05 vauxia Exp $
+
+/**
+ * @file
+ * Installation and update file for Quickbooks Web Services integration.
+ *
+ */
+
+function qbwc_schema() {
+  $schema = array();
+  $schema['qbwc'] = array(
+    'fields' => array(
+      'qbwc_id' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+      ),
+      'uid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+      ),
+      'hostname' => array(
+        'type' => 'varchar',
+        'length' => 128,
+      ),
+      'timestamp_start' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+      ),
+      'timestamp_end' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+      ),
+      'ticket' => array(
+        'type' => 'varchar',
+        'length' => 64,
+      ),
+      'sid' => array(
+        'type' => 'varchar',
+        'length' => 64,
+      ),
+    ),
+    'primary key' => array('qbwc_id'),
+    'indexes' => array('ticket' => array('ticket')),
+  );
+  return $schema;
+}
+
+function qbwc_install() {
+  // Generate unique IDs for this QWC file
+  $part = array();
+  foreach (array(8, 4, 4, 4, 12) as $len) {
+    $part[] = substr(str_pad(base_convert(rand(), 10, 16), $len, "0", STR_PAD_LEFT), 0, $len);
+  }
+
+  drupal_install_schema('qbwc');
+  variable_set('qbwc_owner_id', implode('-', $part));
+}
+
+function qbwc_uninstall() {
+  drupal_uninstall_schema('qbwc');
+  variable_del('qbwc_owner_id');
+}
+
+function qbwc_update_1() {
+  drupal_install_schema('qbwc');
+  return array();
+}

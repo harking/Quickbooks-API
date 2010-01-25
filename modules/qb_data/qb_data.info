@@ -1,0 +1,13 @@
+; $Id: qb_data.info,v 1.1 2009/02/04 00:08:12 vauxia Exp $
+name = Quickbooks Data integration
+description = Stores Quickbooks data lists in Drupal.  The Web Connector module is recommended to keep it current.
+package = Accounting
+core = 6.x
+dependencies[] = qb
+
+; Information added by drupal.org packaging script on 2009-08-03
+version = "6.x-1.x-dev"
+core = "6.x"
+project = "qb"
+datestamp = "1249258978"
+

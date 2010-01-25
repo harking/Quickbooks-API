@@ -1,0 +1,12 @@
+; $Id: qb.info,v 1.2 2009/02/03 21:32:17 vauxia Exp $
+name = Quickbooks
+package = Accounting
+description = Basic Quickbooks support.  Doesn't do much on its own, but acts as a backend for other modules.
+core = 6.x
+
+; Information added by drupal.org packaging script on 2009-08-03
+version = "6.x-1.x-dev"
+core = "6.x"
+project = "qb"
+datestamp = "1249258978"
+
