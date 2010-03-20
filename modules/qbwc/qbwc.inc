@@ -132,7 +132,7 @@ class qbwc {
     module_invoke_all('qbwc_close');
 
     // Close the session and log it just like user_logout() sans drupal_goto.
-    watchdog('user', t('Session closed for %name.', array('%name' => $user->name)));
+    if (variable_get('qbwc_debug', 0)) watchdog('user', t('Session closed for %name.', array('%name' => $user->name)));
 
     // Destroy the current session.
     session_destroy();
@@ -163,6 +163,7 @@ class qbwc {
     $this->_session($params->ticket);
     $errors = array();
     foreach (qbwc_error() as $error) {
+      $errors[] = $error;
     }
     
     return (object) array('getLastErrorResponse' => $errors);
@@ -187,10 +188,28 @@ class qbwc {
 
     // Decide if we have anything to do and return qbxml.
     $requests = array();
-    foreach (qbwc_request_queue() as $request_id => $r) {
+    foreach (qbwc_request_shift() as $request_id => $r) {
+      // Apply filter callbacks to request. Done here because filters usually rely upon previous requested data.
+      if (isset($r['filter_callback'])) {
+          foreach ($r['filter_callback'] as $function) {
+              $function($r); //Pass by reference;
+          }
+          qbwc_set('filters', true);
+      }
 
       // Attach a request id so we can send responses to the correct module.
       $r['request']['_requestID'] = $request_id;
+    
+      // Handle the iterator object so we can process reasonable amounts of data
+      $iteratorID = qbwc_get('iteratorID');
+      if (empty($iteratorID)) {
+        $r['request']['_iterator'] = 'Start';    
+      } else {
+        $r['request']['_iterator'] = 'Continue';
+        $r['request']['_iteratorID'] = $iteratorID;
+      }
+
+      $r['request'] = array('MaxReturned' => variable_get('qbwc_max_returned', 50)) + $r['request'];
 
       if ($r['name']) {
         $requests[$r['name']][] = $r['request'];
@@ -211,81 +230,97 @@ class qbwc {
   
       $ret = qb_qbxml($requests, $top);
     }
+    if (variable_get('qbwc_debug', 0)) watchdog('qbwc_request', print_r($requests, 1), null, WATCHDOG_DEBUG);
     return (object) array( 'sendRequestXMLResult' => $ret );
   }
 
   function receiveResponseXML($params) {
-    $this->_session($params->ticket);
+    try { 
+            if (variable_get('qbwc_debug', 0)) watchdog('qbwc_response', print_r($params, 1), null, WATCHDOG_DEBUG);
+			$this->_session($params->ticket);
 
-    $response = DOMDocument::loadXML($params->response);
-    $hresult = $params->hresult;
-    $message = $params->message;
+			$response = DOMDocument::loadXML($params->response);
+			$hresult = $params->hresult;
+			$message = $params->message;
 
-    // Get the original list of requests and reset the queue.
-    $requests = qbwc_request_queue(NULL, TRUE);
+			// Get the original list of requests and reset the queue.
+			$requests = qbwc_request_queue();
 
-    // Split the response elements and send them to the appropriate callbacks.
-    if (is_object($response)) {
+			// Split the response elements and send them to the appropriate callbacks.
+			if (is_object($response)) {
 
-      $qbxml = $response->getElementsByTagName('QBXMLMsgsRs')->item(0);
-      foreach ($qbxml->childNodes as $element) {
-        if (get_class($element) != 'DOMElement') continue;
-        $result_type = $element->nodeName;
+				$qbxml = $response->getElementsByTagName('QBXMLMsgsRs')->item(0);
+				foreach ($qbxml->childNodes as $element) {
+					if (get_class($element) != 'DOMElement') continue;
+					$result_type = $element->nodeName;
 
-        $request_id = $element->getAttribute('requestID');
-        $request_status = $element->getAttribute('statusCode');
-        $request_message = $element->getAttribute('statusMessage');
-        $request_severity = $element->getAttribute('statusSeverity');
+					$request_id = $element->getAttribute('requestID');
+					$request_status = $element->getAttribute('statusCode');
+					$request_message = $element->getAttribute('statusMessage');
+					$request_severity = $element->getAttribute('statusSeverity');
 
-        // Get the request that matches this response.
-        $request = $requests[$request_id];
+					// Get the request that matches this response, then remove it from the queue.
+					$request = $requests[$request_id];
 
-        if ($request_status) {
-          watchdog('qbwc', '@err: @msg returned for @req request', array('@err' => $request_status, '@msg' => $request_message, '@req' => $request['name']));
-        }
-        
-        $result = array();
-        foreach ($element->childNodes as $r) {
-          if (get_class($r) == 'DOMElement') $result[] = qb_array($r);
-        }
+					if ($request_status) {
+						watchdog('qbwc', '@err: @msg returned for @req request', array('@err' => $request_status, '@msg' => $request_message, '@req' => $request['name']), null, WATCHDOG_ERROR);
+					}
+					
+					$result = array();
+					foreach ($element->childNodes as $r) {
+						if (get_class($r) == 'DOMElement') $result[] = qb_array($r);
+					}
 
-        // This is a multiple-result response, such as a query of items.
-        if ($element->hasAttribute('retCount')) {
-          if ($element->getAttribute('iteratorRemainingCount')) {
-            // The result set is incomplete: re-submit it to the queue.
-            qbwc_request_queue($request);
-          }
-        }
+                    // The result set is incomplete: re-submit it to the beginning of the queue.
+                    $items_remaining = $element->getAttribute('iteratorRemainingCount');
+                    if (!empty($items_remaining) && $items_remaining > 0) {
+                        qbwc_set('iteratorID', $element->getAttribute('iteratorID'));
+                    } else {
+                      qbwc_set('iteratorID', null); // Disable any iterators
+                      qbwc_set('filters', null); // Remove any filter set
+                      qbwc_request_shift(true); // Remove this request, even if it failed
+                    }
 
-        // If there's a callback for this request, call it back.
-        if (isset($request['callback'])) {
-          foreach ($request['callback'] as $func) {
-            $data = isset($request['data']) ? $request['data'] : array();
-            $func($result, $data, $request_status, $request_message);
-          }
-        }
-      }
-    }
+					// If there's a callback for this request, call it back.
+					if (isset($request['callback'])) {
+						foreach ($request['callback'] as $function) {
+							$data = isset($request['data']) ? $request['data'] : array();
+							if (is_array($function)) {
+								$func = $function['function'];
+								$options = $function['options'];
+								$func($result, $data, $request_status, $request_message, $options);
+							}
+							else {
+								$function($result, $data, $request_status, $request_message);
+							}
+						}
+					} //endif
+				} //end foreach
+			}
 
-    /** 
-     * A positive integer from 1-100 represents the percentage of work
-     * completed, where value of 100 means there is no more work. A negative
-     * value means an error has occurred and Web Connector calls getLastError.
-     */
+			/** 
+			 * A positive integer from 1-100 represents the percentage of work
+			 * completed, where value of 100 means there is no more work. A negative
+			 * value means an error has occurred and Web Connector calls getLastError.
+			 */
 
-    // If there are no new requests in the queue, we're 100% done.
-    $done = qbwc_get('requests_done') / qbwc_get('request_id') * 100;
+			// If there are no new requests in the queue, we're 100% done.
+			$done = qbwc_get('requests_done') / qbwc_get('request_id') * 100;
 
-    // Something has logged an error along the way.
-    if (qbwc_error()) {
-      $done = -1;
-    }
-    // If it runs this long, something is probably wrong...
-    if ($_SESSION['countTimes']++ == 30) {
-      $done = 100;
-    }
+			// Something has logged an error along the way.
+			if (qbwc_error()) {
+				$done = -1;
+			}
+			// If it runs this long, something is probably wrong...
+			if ($_SESSION['countTimes']++ == 30) {
+				$done = 100;
+			}
 
-    return (object) array( 'receiveResponseXMLResult' => $done );
+			return (object) array( 'receiveResponseXMLResult' => $done );
+		}
+		catch (Exception $e) {
+			watchdog('qbwc', '@err in @file at line @line', array('@err' => $e->getMessage(), '@file' => $e->getFile(), '@line' => $e->getLine()), null, WATCHDOG_ERROR);
+		}
   }
 
   // Unimplemented functions

@@ -116,15 +116,23 @@ function qb_array($xml) {
   if($xml->hasChildNodes()){ 
     foreach ($xml->childNodes as $child) {
       if (!$value = qb_array($child)) continue;
-      if (($name = $child->nodeName) == '#text') {
-        if (strlen($val = trim($child->nodeValue))) $ret[] = $val;
+      $name = $child->nodeName;
+      if ($name == '#text') {
+        if (strlen($val = trim($child->nodeValue))) 
+          $ret[] = $val;
       }
       else {
-        if(!isset($ret[$name])) {
-          $ret[$name] = $value;
+        if(isset($ret[$name])) {
+          // Need to turn it into an array of items, instead of key,value
+          if (empty($ret[$name][0])) {
+            $tmp = $ret[$name];
+            unset($ret[$name]);
+            $ret[$name][] = $tmp;
+          }
+          $ret[$name][] = $value;
         }
         else {
-          $ret[$name] = array_merge(array($ret[$name]), array($value));
+          $ret[$name] = $value;
         }
       }
     } 

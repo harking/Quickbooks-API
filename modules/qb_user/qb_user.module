@@ -82,6 +82,9 @@ function qb_user_user($op, &$edit, &$account, $category = NULL) {
 
     case 'delete':
       db_query("DELETE FROM {qb_user} WHERE uid = %d", $account->uid);
+      foreach (array_unique($account->qb_user) as $qdvid) {
+        qb_data_value_delete($qdvid);
+      }
       return;
 
     case 'form':
@@ -100,7 +103,10 @@ function qb_user_qb_data_request_alter(&$request) {
   foreach (_qb_user_qb_contact_types() as $name => $info) {
     $settings = variable_get('qb_user_'. $name, array());
     if (isset($settings['qdid']) && ($settings['qdid'] == $query->qdid)) {
-      $request['callback'][] = 'qb_user_qbwc_response';
+      $request['callback'][] = array(
+        'function' => 'qb_user_qbwc_response', 
+        'options' => $settings
+      );
     }
   }
 }
@@ -108,21 +114,19 @@ function qb_user_qb_data_request_alter(&$request) {
 /** 
  * Implementation of a query response function.
  */
-function qb_user_qbwc_response($result, &$data, $status, $message) {
+function qb_user_qbwc_response($result, &$data, $status, $message, $settings) {
   foreach ($result as $r) {
-
     $value = $r['value'];
     $edit = array('qdvid' => $value->qdvid, 'mail' => $r['Email']);
     switch ($data['op']) {
       case 'qry':
-        watchdog('cron', print_r($r,true), array(), WATCHDOG_WARNING);
         if ($r['modified']) {
-          $account = user_load(db_result(db_query("SELECT uid FROM {qb_user} 
-            WHERE qdvid = %d", $value->qdvid)));
-          // TODO re-map values via profile.
+          if ($user = user_load(db_result(db_query("SELECT uid FROM {qb_user} WHERE qdvid = %d", $value->qdvid)))) {
+            $user->name = _qb_user_prepare_name($r);
+            $user->mail = $edit['mail'];
+            $user = user_save($user);
 
-          if ($edit['mail'] != $account->mail) {
-            $account->mail = $edit['mail'];
+            $edit['uid'] = $user->uid;
             drupal_write_record('qb_user', $edit, 'qdvid');
           }
         }
@@ -136,10 +140,21 @@ function qb_user_qbwc_response($result, &$data, $status, $message) {
             WHERE u.mail = '%s' AND qb.qdvid IS NULL", $edit['mail']))) {
 
             $edit['uid'] = $uid;
+            $update = 'uid';
           }
           elseif ($mode == 'add') {
-            //TODO add new user.
+            //Check if the user exists already
+            if (!$user = user_load(array('mail'=>$edit['mail']))) {
+              $name = _qb_user_prepare_name($r);
 
+              $user = user_save('', array(
+                'name' => $name,
+                'mail' => $edit['mail'],
+                'status' => 1,
+                'roles' => $settings['roles']
+              ));
+              $edit['uid'] = $user->uid;
+            }
           }
           elseif ($mode == 'match') {
             // Save this entry for later.  If a user with the same address
@@ -159,4 +174,20 @@ function qb_user_qbwc_response($result, &$data, $status, $message) {
         break;
     }
   }
+}
+
+function _qb_user_prepare_name($r) {
+  /*// Data from quicken uses FirstName and LastName fields.
+  if (!empty($r['FirstName']) && !empty($r['LastName'])) {
+    $name = $r['FirstName'].' '.$r['LastName'];
+  }
+  // No FirstName and LastName defined, just use the default required name of the item.
+  else {
+    $name = ucwords(strtolower($r['Name']));
+    if (strpos($name, ',')) { // If name is stored Last, First
+      $name = implode(' ', array_reverse(split(', ',$name)));
+    }
+  }*/
+  $name = $r['Name'];
+  return $name;
 }

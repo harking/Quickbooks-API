@@ -81,6 +81,39 @@ function qbwc_request_queue($request = array(), $reset = FALSE) {
 }
 
 /**
+ * Shifts the first request off the queue.
+ */ 
+function qbwc_request_shift($remove = FALSE) {
+  if (!$requests = qbwc_get('request_queue')) return array();
+
+  $request = array();
+  foreach($requests as $key => $value) {
+    $request = array($key => $value);
+    if ($remove) {
+      unset($requests[$key]);
+      qbwc_set('request_queue', $requests);
+    }
+    break;
+  }
+
+  return $request;
+}
+
+/**
+ * Removes the specified key if it exists
+ */ 
+function qbwc_request_remove($request_id) {
+  if (!$requests = qbwc_get('request_queue')) return false;
+  
+  if (isset($requests[$request_id])) {
+    unset($requests[$request_id]);
+    qbwc_set('request_queue', $requests);
+    return true;
+  }
+  return false;
+}
+
+/**
  * API function to set a variable in the qbwc session.
  */
 function qbwc_set($name, $value = NULL) {

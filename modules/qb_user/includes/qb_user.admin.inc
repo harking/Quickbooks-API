@@ -9,7 +9,7 @@ function qb_user_admin_form() {
 
   $form['drupal'] = array(
     '#type' => 'fieldset',
-    '#title' => t('Drupal users'),
+    '#title' => t('Drupal user mapping'),
     '#collapsible' => TRUE,
     '#collapsed' => FALSE,
   );
@@ -19,20 +19,26 @@ function qb_user_admin_form() {
     '#options' => array(
        'none' => t('Do not map users to Quickbooks'), 
        'all' => t('Map all users to Quickbook contacts'), 
-       'role' => t('Only map users in certain roles'),
+       'role' => t('Only map users in certain roles (broken, currenlty maps all users)'),
     ),
     '#default_value' => variable_get('qb_user_enable', 'none'),
   );
 
+  $form['drupal']['roles_to_map'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Roles to map'),
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+  );
   if ($roles) {
-    $form['drupal']['qb_user_roles'] = array(
+    $form['drupal']['roles_to_map']['qb_user_roles'] = array(
       '#type' => 'checkboxes',
       '#options' => $roles,
       '#default_value' => variable_get('qb_user_roles', array()),
     );
   }
   else {
-    $form['drupal']['qb_user_roles'] = array(
+    $form['drupal']['roles_to_map']['qb_user_roles'] = array(
       '#type' => 'markup',
       '#value' => '<p>'. t('There are no available roles. Please visit the !link page to add one or more roles.', array('!link' => l(t('roles'), 'admin/user/roles'))) .'</p>',
     );
@@ -50,7 +56,8 @@ function qb_user_admin_form() {
     $form['quickbooks'][$name] = array(
       '#type' => 'fieldset',
       '#title' => $info['title'],
-      '#collapsible' => FALSE,
+      '#collapsible' => true,
+      '#collapsed' => (empty($value['qb_qry']) && empty($value['qb_add']) && empty($value['qb_mod'])),
       '#tree' => TRUE,
     );
     if ($value['qdid']) {
@@ -148,37 +155,44 @@ function _qb_user_query_save(&$form, &$form_state) {
     $name = 'qb_user_'. $name;
     $edit = $form_state['values'][$name];
     if ($qdid = $edit['qdid']) $query = qb_data_query_load($qdid);
-    $edit['title'] = t($info['title']);
-    $edit['status'] = $values[''];
-    $edit['frequency'] = 0;
-    $edit['callbacks'] =  'qb_user_qbwc_map';
-    $edit['request'] = $info['request'];
-    $query = qb_data_query_save($query, $edit);
-    $form_state['values'][$name]['qdid'] = $query->qdid;
+
+    if ($qdid && empty($edit['qb_qry']) && empty($edit['qb_add']) && empty($edit['qb_mod'])) {
+      // Remove the qb_data entry for this if it exists
+      qb_data_query_delete($query);
+    } else {
+      $edit['title'] = t('Quickbooks Users Module: \''.$info['title'].'\' User Mapping');
+      $edit['status'] = 1;
+      $edit['frequency'] = 0;
+      $edit['callbacks'] =  'qb_user_qbwc_map';
+      $edit['request'] = $info['request'];
+      $edit['weight'] = -5;
+      $query = qb_data_query_save($query, $edit);
+      $form_state['values'][$name]['qdid'] = $query->qdid;
+    }
   }
 }
 
 function _qb_user_qb_contact_types() {
   return array(
     'customer' => array(
-      'request' => 'Customer',
+      'request' => 'Customer', // From QBXML WSDL
       'title' => t('Customers'),
-      'description' => t('Names from your customer list.'),
+      'description' => t('Customers'),
     ),
     'employee' => array(
       'request' => 'Employee',
       'title' => t('Employees'),
-      'description' => t('Employees.'),
+      'description' => t('Employees'),
     ),
     'vendor' => array(
       'request' => 'Vendor',
       'title' => t('Vendors'),
-      'description' => t('Names from your vendor list.'),
+      'description' => t('Vendors'),
     ),
     'other' => array(
       'request' => 'OtherName',
-      'title' => t('Other contacts'),
-      'title' => t('Contacts from your "Other Names" list'),
+      'title' => t('Other Contacts'),
+      'description' => t('Contacts from the "Other Names" list.'),
     ),
   );
 }

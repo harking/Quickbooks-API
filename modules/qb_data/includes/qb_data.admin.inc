@@ -11,6 +11,7 @@ function qb_data_admin_overview() {
     t('Frequency'),
     t('Last Run'),
     t('Records'),
+    t('Weight'),
     '',
   );
 
@@ -22,6 +23,7 @@ function qb_data_admin_overview() {
       $row->frequency,
       $row->lastrun,
       $row->items,
+      $row->weight,
       l('edit', 'admin/settings/qb/data/'. $row->qdid),
     );
   }
@@ -123,11 +125,19 @@ function qb_data_admin_form($form_state, $qdid = NULL) {
       '#title' => t('Minimum date'),
       '#description' => t('For things like invoices or time tracking entries, you may not want to import old data into this site.  In that case, set this value to th earliest date of the records you would like to import.'),
     );
+
+    $form['weight'] = array(
+      '#type' => 'weight',
+      '#title' => t('Weight of data query'),
+      '#default_value' => isset($query->weight) ? $query->weight : 0,
+      '#description' => t('The weight of the query determines when it is run compared to other queries. The lower the weight the sooner it will run. Usually db_user queries should run before others. This helps when using nodereference fields so that the referenced field exists first.'),
+    );
   }
     $form['submit'] = array(
       '#type' => 'submit',
       '#value' => t('Save'),
     );
+
   
   return $form;
 }
@@ -185,6 +195,16 @@ function qb_data_query_save($query = NULL, $edit) {
 }
 
 /**
+ * Delete a qb_data record.
+ */
+function qb_data_query_delete($query) {
+  if ($query->qdid) {
+    return db_query('DELETE FROM {qb_data} WHERE qdid = %d', $query->qdid);
+  }
+  return false;
+}
+
+/**
  * Return a query definition.
  */
 function qb_data_query_load($qdid) {
@@ -206,7 +226,7 @@ function qb_data_queries($active_only = TRUE) {
     FROM {qb_data} d
     LEFT JOIN {qb_data_value} v USING (qdid)";
   if ($active_only) $sql .= " WHERE d.status = 1 AND v.status = 1";
-  $sql .= " GROUP BY d.qdid ORDER by title";
+  $sql .= " GROUP BY d.qdid ORDER by weight";
 
   $res = db_query($sql);
   while ($row = db_fetch_object($res)) $queries[$row->qdid] = $row;
@@ -218,15 +238,23 @@ function qb_data_queries($active_only = TRUE) {
  */
 function _qb_data_recommended_queries() {
   return array(
-    'Customer' => t('Customer'),
-    'Employee' => t('Employee'),
-    'Vendor' => t('Vendor'),
-    'ItemInventory' => t('Inventory item'),
-    'ItemNonInventory' => t('Non-inventory item'),
-    'ItemService' => t('Service item'),
-    'TimeTracking' => t('Time tracking'),
-    'Invoice' => t('Invoice'),
-    'ItemPayment' => t('Payment'),
+    'Customer' =>         t('Customer'),
+    'Employee' =>         t('Employee'),
+    'Vendor' =>           t('Vendor'),
+    'Item' =>             t('Line Item'),
+    'ItemDiscount' =>     t('Line Item: Discount'),
+    'ItemInventory' =>    t('Line Item: Inventory'),
+    'ItemNonInventory' => t('Line Item: Non-inventory'),
+    'ItemOtherCharge' =>  t('Line Item: Other Charge'),
+    'ItemService' =>      t('Line Item: Service item'),
+    'ItemGroup' =>        t('Line Item: Item group'),
+    'TimeTracking' =>     t('Time tracking'),
+    'Invoice' =>          t('Invoice'),
+    'ItemPayment' =>      t('Payment'),
+    'ReceivePayment' =>   t('Received Payments'),
+    'Journal Entry' =>    t('Journal Entries'),
+    'Check' =>            t('Check'),
+    'Charge' =>           t('Charge'),
   );
 }
 

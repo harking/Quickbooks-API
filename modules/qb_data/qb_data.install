@@ -82,6 +82,12 @@ function qb_data_schema() {
         'default' => NULL,
         'serialize' => TRUE,
       ),
+      'weight' => array(
+        'type' => 'int',
+        'unsigned' => FALSE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
     ),
     'primary key' => array('qdid'),
   );
@@ -166,4 +172,15 @@ function qb_data_install() {
 
 function qb_data_uninstall() {
   drupal_uninstall_schema('qb_data');
+}
+
+function qb_data_update_6001() {
+  $ret = array();
+  db_add_field($ret, 'qb_data', 'weight', array(
+        'type' => 'int',
+        'unsigned' => FALSE,
+        'not null' => TRUE,
+        'default' => 0,
+      ));
+  return $ret;
 }

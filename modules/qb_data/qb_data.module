@@ -34,6 +34,9 @@ function qb_data_qbwc_request() {
   return call_user_func_array('_qb_data_qbwc_request', $args);
 }
 
+function qb_data_qbwc_request_add_filter() {
+}
+
 /**
  * Implementation of a callback for Web Connector responses.
  */
@@ -85,14 +88,20 @@ function qb_data_value_save(&$value, $edit) {
   $value = (object) $edit;
 }
 
+function qb_data_value_delete($qdvid) {
+  return db_query("DELETE FROM {qb_data_value} WHERE qdvid = %d", $qdvid);
+}
+
 /**
  * Change the Drupal status, which will prevent it from appearing in most 
  * queries.  This is different from qb_status, which must be manually changed
  * in order for Quickbooks to set it to inactive.
  */
 function qb_data_value_deactivate($value) {
-  $value->status = 0;
-  qb_data_save($value);
+  $edit = array(
+    'status' => 0,
+  );
+  qb_data_value_save($value, $edit);
 }
 
 /**

@@ -44,6 +44,22 @@ function qbwc_admin_form() {
     '#options' => $options,
   );
 
+  $form['qbwc_max_returned'] = array(
+    '#type'         => 'textfield',
+    '#title'        => 'Results Returned Per Request',
+    '#descriptiopn' => 'Enter the maximum number of results you would like returned per request. This limit will keep PHP from running out of ram trying to parse the XML returned from Quickbooks and keep the Quickbooks Web Connector from timing out waiting for the Web Service to reply.',
+    '#default_value' => variable_get('qbwc_max_returned', 50),
+    '#size' => 5,
+    '#maxlength' => 5,
+  );
+
+  $form['qbwc_debug'] = array(
+    '#type'         => 'checkbox',
+    '#title'        => 'Enable QBWC Debugging Messages',
+    '#description' => 'Enabling this will cause debugging messages to be logged into the watchdog table.',
+    '#default_value' => variable_get('qbwc_debug', 0),
+  );
+
   $form['qbwc_qwc'] = array(
     '#type' => 'markup',
     '#value' => l(t('Download QWC file'), 'admin/settings/qb/qwc'),

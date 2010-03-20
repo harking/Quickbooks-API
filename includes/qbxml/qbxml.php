@@ -48,9 +48,6 @@ foreach (array ('5.0', '6.0', '7.0') as $version) {
         _get_element($node, $elements, TRUE);
       }
     }
-  //_get_xml($xml, $elements, $queries);
-  //_get_xml($so, $elements, $queries);
-  //_get_xml($ops, $elements, $queries);
   }
 
   // Write the resulting arrays to a file.
@@ -85,18 +82,43 @@ function _get_element($node, &$elements, $save = NULL) {
 
   $name = _get_name($node);
 
-  if ( $default = $node->getAttribute('default') ) {
+  $min_occurs = $node->getAttribute('minOccurs');
+  if ( $min_occurs !== '') {
+    $e['min_occurs'] = $min_occurs;
+  }
+
+  $max_occurs = $node->getAttribute('maxOccurs');
+  if ( $max_occurs !== '' ) {
+    $e['max_occurs'] = $max_occurs;
+  }
+
+  $default = $node->getAttribute('default');
+  if ( $default !== '' ) {
     $e['default'] = $default;
   }
 
   // If it contains a sequence of items, list its children.
-  if (in_array($node->childNodes->item(1)->nodeName, array('xsd:sequence', 'xsd:complexType'))) {
+  elseif (in_array($node->childNodes->item(1)->nodeName, array('xsd:choice', 'xsd:sequence', 'xsd:complexType'))) {
     foreach ($node->getElementsByTagName('sequence') as $sequence) {
       foreach ($sequence->childNodes as $element) {
         if (get_class($element) != 'DOMElement') continue;
-        $group[_get_name($element)] = _get_element($element, $elements);
+        // If it is a group field, we treat it as if it were a plain (non ref) 
+        // xsd:element, we do a ref lookup
+        if ($element->nodeName == 'xsd:group' && 
+            !$element->hasChildNodes()) {
+          $e =& _get_element($element, $elements);
+        }
+        else {
+          $group[_get_name($element)] = _get_element($element, $elements);
+        } 
       }
     }
+    foreach ($node->getElementsByTagName('choice') as $choice) {
+		  foreach($choice->childNodes as $element) {
+			  if (get_class($element) != 'DOMElement') continue;
+			  $group['choice'][_get_name($element)] = _get_element($element, $elements);
+			}
+		}
     foreach ($node->getElementsByTagName('complexType') as $sequence) {
       foreach ($sequence->childNodes as $element) {
         if (get_class($element) != 'DOMElement') continue;
@@ -105,20 +127,17 @@ function _get_element($node, &$elements, $save = NULL) {
     }
   }
 
-  // If it's a 'choice' type, list its children
-  elseif ($node->nodeName == 'xsd:choice') {
-    foreach ($node->childNodes as $element) {
-      if (get_class($element) != 'DOMElement') continue;
-      $item_name = _get_name($element);
-      $group[$item_name] = _get_element($element, $elements);
-      $e['choice'][] = $item_name;
-    }
-  }
-
   // Reference to another item.
   elseif ($node->getAttribute('ref')) {
-    if (!isset($elements[$name])) $elements[$name] = array();
-    $e =& $elements[$name];
+    if ($name == 'DataExtRet') {
+      $e = array_merge($e, array('DataExtName' => array('type'=>'STRTYPE'),
+        'DataExtType' => array('type' => 'STRTYPE'),
+        'DataExtValue' => array('type' => 'STRTYPE')
+      ));
+    } else {
+      if (!isset($elements[$name])) $elements[$name] = array();
+      $e =& $elements[$name];
+    }
   }
 
   elseif ( $type = $node->getAttribute('type') ) {
@@ -165,6 +184,14 @@ function _get_element($node, &$elements, $save = NULL) {
           break;
       }
     }
+  }
+
+  if (array_key_exists('', $group)) {
+    //Move all of them into $e
+    foreach($group[''] as $val){
+      $e[] = $val;
+    }
+    unset($group['']);
   }
 
   $e = array_merge($e, $group);

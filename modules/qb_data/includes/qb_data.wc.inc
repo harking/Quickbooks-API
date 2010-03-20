@@ -5,7 +5,7 @@ function _qb_data_qbwc_request() {
   // Update all of the lists we're watching.
   $res = db_query("SELECT * FROM {qb_data} 
     WHERE status = 1 
-    AND frequency >= 0 AND frequency + lastrun < %d", 
+    AND frequency >= 0 AND frequency + lastrun < %d ORDER BY weight", 
     qbwc_get('time'));
 
   while ($row = db_fetch_object($res)) {
@@ -17,7 +17,6 @@ function _qb_data_qbwc_request() {
         'data' => array('qb_query' => $row, 'op' => 'qry'),
         'request' => array(),
       );
-watchdog('request', print_r($req, 1));
       // TODO "request" key contains the actual filters.
 
       drupal_alter('qb_data_request', $req);
@@ -75,16 +74,21 @@ watchdog('request', print_r($req, 1));
 function _qb_data_qbwc_response(&$result, &$data, $status, $message) {
   $query = $data['qb_query'];
 
-watchdog('response', print_r($data, 1). ' ' . print_r($result, 1));
   foreach ($result as $i => $r) {
     switch ($data['op']) {
       case 'qry':
         $r['new'] = $r['modified'] = FALSE;
+        
+        if (!empty($r['ListID'])) {
+          $value = db_fetch_object(db_query("SELECT * FROM {qb_data_value}
+            WHERE qdid = %d AND qb_list_id = '%s'", $query->qdid, $r['ListID']));
+        } 
+        else if (!empty($r['TxnID'])) {
+          $value = db_fetch_object(db_query("SELECT * FROM {qb_data_value}
+            where qdid = %d and qb_txn_id = '%s'", $query->qdid, $r['TxnID']));
+        }
 
-        // Grab a value to update, if available.
-        if ($value = db_fetch_object(db_query("SELECT * FROM {qb_data_value}
-          WHERE qdid = %d AND qb_list_id = '%s'", $query->qdid, $r['ListID']))){
-
+        if ($value) {
           $r['modified'] = ($value->qb_edit_sequence != $r['EditSequence']);
         }
         else {

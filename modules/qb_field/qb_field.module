@@ -1,6 +1,5 @@
 <?php // $Id: qb_field.module,v 1.2 2009/02/19 05:32:04 vauxia Exp $
 
-
 /**
  * Implementation of hook_elements().
  */
@@ -48,6 +47,7 @@ function _qb_field_query_save(&$form, &$form_state) {
     'min_timestamp' => '', // TODO
     'frequency' => 0,
     'callbacks' => 'qb_field_qbwc_map',
+    'weight' => $form_state['values']['weight'],
   );
   if (isset($form_state['values']['request'])) {
     $edit['request'] = $form_state['values']['request'];
@@ -66,7 +66,7 @@ function qb_field_field_settings($op, &$field) {
       $form = array();
 
       if ($field['type'] == 'qb_data') {
-        // One id per customer, please.
+        // One id perefustomer, please.
         $form['multiple'] = array('#type' => 'value', '#value' => 0);
 
         // Create a new, default qb_data query for this field.
@@ -96,6 +96,26 @@ function qb_field_field_settings($op, &$field) {
           '#default_value' => isset($field['unique']) ? $field['unique'] : 1,
         );
 
+        $form['include_line_items'] = array(
+          '#type' => 'checkbox',
+          '#title' => t('Include Line Items'),
+          '#description' => t('Some Lists in Quickbooks can have attached Line Items. Enabling this will allow them to be included when importing from QuickBooks and will enable extra field mappings.'),
+          '#default_value' => isset($field['include_line_items']) ? $field['include_line_items'] : 0,
+        );
+
+        // For invoice line ret fields we store their data in a separeate CCK defined here 
+        if (isset($field['include_line_items']) && $field['include_line_items'] == 1) { 
+          $node_names[''] = '--None--';
+          $node_names = array_merge($node_names,node_get_types('names'));
+          $form['line_item_cck_name'] = array(
+            '#type' => 'select',
+            '#title' => t('Select the node type that will be used to store line item data.'),
+            '#description' => t('If a InvoiceLineRet TxnLineID field is available, use this to select the CCK node type that will be used to store the data.'),
+            '#options' => $node_names,
+            '#default_value' => isset($field['line_item_cck_name']) ? $field['line_item_cck_name'] : '',
+          );
+        }
+
         $form['qb_qry'] = array(
           '#type' => 'checkbox',
           '#title' => t('Import Quickbooks records'),
@@ -122,6 +142,13 @@ function qb_field_field_settings($op, &$field) {
           '#title' => t('If there is a conflict'),
           '#options' => array('quickbooks' => t('Quickbooks wins'), 'drupal' => t('Drupal wins'), 'none' => t('Do not update')),
         );
+
+        $form['weight'] = array(
+          '#type' => 'weight',
+          '#title' => t('Weight of data query'),
+          '#default_value' => isset($query->weight) ? $query->weight : 0,
+          '#description' => t('The weight of the query determines when it is run compared to other queries. The lower the weight the sooner it will run. Usually db_user queries should run before others. This helps when using nodereference fields so that the referenced field exists first.'),
+        );
       }
 
       return $form;
@@ -131,7 +158,7 @@ function qb_field_field_settings($op, &$field) {
 
     case 'save':
       // Return the values we want saved back to the field.
-      return array('qdid', 'unique', 'truth_copy', 'qb_map', 'request');
+      return array('qdid', 'unique', 'include_line_items', 'line_item_cck_name', 'truth_copy', 'qb_map', 'request');
 
     case 'database columns':
       return array( 'qdvid' => array('type' => 'int', 'unsigned' => TRUE) );
@@ -148,7 +175,7 @@ function qb_field_field($op, &$node, $field, &$items, $teaser, $page) {
         if (qb_field_content_is_empty($item, $field)) continue;
         $save = TRUE;
 
-        // Create or update a qb_data value and set it to "pending".
+        // Create or update a qb_data_value and set it to "pending".
         $edit = array(
           'status' => $node->status,
           'qb_name' => $node->title, // TODO configurable.
@@ -164,6 +191,17 @@ function qb_field_field($op, &$node, $field, &$items, $teaser, $page) {
 
         // Make sure our value ID is saved properly.
         $items[$i]['qdvid'] = $value->qdvid;
+      }
+      return;
+    case 'delete':
+      foreach ($items as $i => $item) {
+        if ($item['qdvid'] != 0) {
+          $value = qb_data_value_load($item['qdvid']);
+        }
+        if ($value) {
+          //qb_data_value_deactivate($value);
+          qb_data_value_delete($item['qdvid']);
+        }
       }
       return;
   }
@@ -237,6 +275,7 @@ function qb_field_qb_data_request_alter(&$request) {
 
       // Attach our field mapping callback so we can handle the response.
       $request['callback'][] = 'qb_field_qbwc_response';
+      $request['filter_callback'][] = 'qb_field_qbwc_response_filter';
       $request['data']['field'] = $field;
 
       // Augment the request values with our own.
@@ -246,6 +285,38 @@ function qb_field_qb_data_request_alter(&$request) {
       }
     }
   }
+}
+
+function _qb_field_set_filter(&$request, $field) {
+  $filtering_qdids = array();
+  foreach( $field['qb_map'] as $key => $val ) {
+    if (substr($val, -6) == 'ListID') {
+      if (!empty($field['qb_map'][$key.'_filter']) && $field['qb_map'][$key.'_filter']) {
+        $filtering_qdids[] = $field['qb_map'][$key.'_qdid'];
+      }
+    }
+  }
+  if (count($filtering_qdids) > 0) {
+    $request['EntityFilter'] = array();
+    foreach($filtering_qdids as $qdid) {
+      $associated_list_ids = db_query('SELECT * FROM {qb_data_value} WHERE qdid = %d', $qdid);
+
+      while($row = db_fetch_array($associated_list_ids)) {
+        $request['EntityFilter']['ListID'][] = $row['qb_list_id'];
+      }
+    }
+    // Don't query this list when we have set a related list to filter on, results will be too large
+    if (count($request['EntityFilter']['ListID']) == 0) {
+      $request = array();
+    }
+  }
+
+  if ($field['request'] == 'Invoice') {
+  //if ($field['include_line_items']) {
+    $request['IncludeLineItems'] = '1';
+  }
+
+  $request['OwnerID'] = '0'; // Makes quickbooks return DataExtRef fields too
 }
 
 function qb_field_set_request(&$request, $value, $field) {
@@ -277,34 +348,45 @@ function qb_field_qbwc_response($result, &$data, $status, $message) {
 
       // The result of a Query request is a new or modified QB value.
       case 'qry':
-        if (!$r['new'] || $r['modified']) continue;
+        //if (!$r['new'] && !$r['modified'] && empty($field['qb_map'])) continue;
+        $save = false;
 
-        // Record was modified: re-map and re-save values.
-        if ($r['modified']) {
-          $node = _qb_field_node_load($field, $value);
+        $values = array();
+
+        $title_field = (!empty($r['ListID'])) ? 'Name' : 'RefNumber';
+        if ($values['title'] != $r[$title_field]) {
+          $values['title'] = $r[$title_field];
+          $save = true;
         }
 
-        // Record was newly-added: bake up a corresponding node.
-        elseif ($r['new']) {
-          $node = (object) array( 'type' => $type );
-          $values = array();
+        $node = _qb_field_node_load($field, $value);
+        if ( $node ) {
+          // Existing node found, check if any field changed and update it if one has 
+          // Have to do this because balance and total balance on Customer does not up date with touched date.
+          $save = _qb_field_update_node_fields($field, $r, $values, $node);
+        } else {
+          // Make a new node, set all fields to their values form quickbooks
+          $node = new stdClass();
+          $node->type = $type;
           $values[$field['field_name']] = array(array('qdvid' => $value->qdvid));
-          $values['title'] = $r['Name']; // TODO hard-coded.
+          _qb_field_update_node_fields($field, $r, $values, $node);
+          $save = true; 
         }
 
-        foreach ($r as $qb_name => $qb_value) {
-          if ($field['qb_map']) {
-            if ($content_field = array_search($qb_name, $field['qb_map'])) {
-              //TODO hard-coded "value" key
-              $values[$content_field] = array(array('value' => $qb_value));
-            }
+        if ($save) {
+          $values['uid'] = $user->uid;
+          $values['op'] = t('Save');
+          $form_state = array( 'values' => $values );
+          drupal_execute($type.'_node_form', $form_state, $node);
+          if ($errors = form_get_errors()) {
+            watchdog('error', t("Can't save this Node: @node \n\n Fields: @fields \n\n Error: @error", array('@node' => print_r($node,true), '@fields' => print_r($form_state,true), '@error' => print_r($errors,true))));
           }
         }
 
-        $values['op'] = t('Save');
-        $values['name'] = $user->name;
-        $form_state = array( 'values' => $values );
-        drupal_execute($type .'_node_form', $form_state, $node);
+        // Check if we need to save Line Items, if so, create a new node to of the type defined and set the nodereference field to point to here
+        if ($field['include_line_items']) {
+          _qb_field_handle_line_items($field, $r, $node);
+        }
 
         break;
 
@@ -312,6 +394,142 @@ function qb_field_qbwc_response($result, &$data, $status, $message) {
       case 'add':
       case 'mod':
         break;
+    }
+  }
+}
+
+function _qb_field_handle_line_items($field, $result, $invoice_node) {
+  global $user;
+  $cck_name = $field['line_item_cck_name'];
+  $field_names = array('description' => 'Desc', 'quantity' => 'Quantity', 'rate' => 'Rate', 'amount' => 'Amount');
+
+  $result_invoice_items = array();
+  if (isset($result['InvoiceLineRet'][0])) {
+    $result_invoice_items = $result['InvoiceLineRet'];
+  } else {
+    $result_invoice_items[0] = $result['InvoiceLineRet'];
+  }
+
+  // First delete all line items associated with this node's nid
+  $query = db_query('SELECT nid FROM {content_type_'.$cck_name.'} c WHERE c.field_invoice_nid = %d', $invoice_node->nid);
+  while ($nid = db_result($query)) {
+    node_delete($nid);
+  }
+
+  // Save line items
+  foreach($result_invoice_items as $result_invoice_item) {
+    $values = array();
+    $node = new stdClass();
+    $values['title'] = $result_invoice_item['Desc'];
+    $node->type = $cck_name;
+    $values['field_invoice'][0]['nid'] = $invoice_node->nid;
+    foreach ($field_names as $field_name => $line_item_field_name) {
+      if (isset($result_invoice_item[$line_item_field_name])) {
+        $values['field_'.$field_name][0]['value'] = $result_invoice_item[$line_item_field_name];
+      }
+    }
+    $values['uid'] = $user->uid;
+    $values['op'] = t('Save');
+    $form_state = array( 'values' => $values );
+    drupal_execute($cck_name.'_node_form', $form_state, $node);
+    if ($errors = form_get_errors()) {
+      watchdog('error', t("Can't save this Node: @node \n\n Fields: @fields \n\n Error: @error", array('@node' => print_r($node,true), '@fields' => print_r($form_state,true), '@error' => print_r($errors,true))));
+    }
+  }
+}
+
+/**
+ * Walks through the nodes fields checking to see if they need to be updated, and if so 
+ * will update them and return true. If none of the mapped fields changed it returns false.
+ */ 
+function _qb_field_update_node_fields($field, $qb_result, &$values, &$node, $parents = array()) {
+  $update = false;
+
+  foreach ($qb_result as $qb_name => $qb_value) {
+    if (is_array($qb_value)) { 
+      $new_parents = array_merge($parents, array($qb_name));
+      if (_qb_field_update_node_fields($field, $qb_value, $values, $node, $new_parents)) {
+        $update = true;
+      }  
+    }
+    else {
+      $key = implode('.',array_merge($parents, array($qb_name)));
+      //Remove any array indexing due to multiple values
+      if (substr($key, -12) == 'DataExtValue') { $key = 'DataExtRet.DataExtValue'; } 
+
+      $content_field = array_search($key, $field['qb_map'], TRUE);
+      if ($content_field) {
+        $node_field = $node->$content_field;
+        $field_name = 'value';
+        
+        if (substr($key, -12) == 'DataExtValue') {
+          // Check if this DataExt Field is the one selected in configuration
+          if ($field['qb_map'][$content_field.'_data_ext_name'] != $qb_result['DataExtName']) {
+            continue;
+          }
+        } 
+        // If this field is a storing a nodereference we need to try and find 
+        // the nid of the qb_value so we can correctly update it.
+        elseif (substr($key, -6) == 'ListID' || substr($key, -5) == 'TxnID') {
+          $field_name = 'nid';
+          $qb_value = _qb_field_nodereference_field_lookup($field, $qb_value, $content_field, $key);
+        }
+
+        
+        if (empty($node_field[0][$field_name]) || $node_field[0][$field_name] != $qb_value) {
+          $values[$content_field] = array(array($field_name => $qb_value));
+          $update = true;
+        }
+      }
+    }
+  }
+  return $update;
+}
+
+function _qb_field_nodereference_field_lookup($field, $qb_value, $content_field, $key) {
+  $qdid = $field['qb_map'][$content_field.'_qdid'];
+  // Query the qb_data_value table on qb_list_id, then take that qdvid and search 
+  // the nodes for a cck field that is storing it
+  if (substr($key, -6) == 'TxnID') {
+   $qb_data_value = db_fetch_object(db_query('
+      SELECT * FROM {qb_data_value} qbdv 
+      WHERE qbdv.qdid = %d AND qbdv.qb_txn_id = \'%s\'', 
+        $qdid, $qb_value));
+  } else {
+    $qb_data_value = db_fetch_object(db_query('
+      SELECT * FROM {qb_data_value} qbdv 
+      WHERE qbdv.qdid = %d AND qbdv.qb_list_id = \'%s\'', 
+        $qdid, $qb_value));
+  }
+
+  if ($qb_data_value) {
+    $related_field = '';
+    $info = _content_type_info();
+    foreach ($info['fields'] as $rf) {
+      if (!empty($rf['qdid']) && $rf['qdid'] == $qdid) {
+        $related_field = $rf;
+        break;
+      }
+    }
+    if ($related_field) {
+      $db_info = content_database_info($related_field);
+      $nid = db_result(db_query("
+        SELECT nid FROM {". $db_info['table'] ."} WHERE %s = %d", 
+          $related_field['field_name'] .'_qdvid', 
+          $qb_data_value->qdvid));
+      $qb_value = $nid;
+    } 
+  }
+  return $qb_value;
+}
+
+function qb_field_qbwc_response_filter(&$request) {
+  $query = $request['data']['qb_query'];
+
+  foreach (qb_field_list() as $field) {
+    if ($field['qdid'] == $query->qdid) {
+      // Modify the request attaching filters as needed
+      _qb_field_set_filter($request['request'], $field);
     }
   }
 }
@@ -328,34 +546,19 @@ function _qb_field_map_form($field, $query) {
     '#title' => t('Quickbooks mappings'),
     '#collapsible' => FALSE,
     '#tree' => TRUE,
+    '#description' => '<pre>'.print_r($qb_data,true).'</pre>',
   );
 
   if (!$values = $field['qb_map']) {
     $values = array();
   }
 
-  foreach ($qb_data as $qb_key => $qb_info) {
-    if (!is_string($qb_key)) continue;
-    if (substr($qb_key, -4) == 'Core') continue; // ListCore, TxnCore, etc.
-    if (in_array($qb_key, array('FullName', 'TxnID'))) continue; 
+  $qb_fields = _qb_field_map_form_options($qb_data);
 
-    // "Ref" fields.
-    if (substr($qb_key, -3) == 'Ref') {
-    }
+  $content_type_info = _content_type_info();
+  $content_type_fields = $content_type_info['content types'][$field['type_name']]['fields'];
 
-    else {
-      $label = preg_replace('/([A-Z]+)/', ' \1', $qb_key);
-      $type = _qb_field_map_field($qb_info);
-      $qb_fields[$type][$qb_key] = $label;
-		}
-  }
-
-  foreach ($qb_fields as $type => $items) {
-    sort($items);
-    $qb_fields[$type] = array_merge(array('' => t('Quickbooks field')), $items);
-  }
-
-  foreach (content_fields() as $cf) {
+  foreach ($content_type_fields as $cf) {
     if (!isset($qb_fields[$cf['type']])) continue;
     $form[$cf['field_name']] = array(
       '#type' => 'select',
@@ -363,9 +566,90 @@ function _qb_field_map_form($field, $query) {
       '#options' =>  $qb_fields[$cf['type']],
       '#default_value' => $values[$cf['field_name']],
     );
+    if (substr($values[$cf['field_name']], -12) == 'DataExtValue') { 
+      $form[$cf['field_name'].'_data_ext_name'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Name to select custom field for \'@field_name\'', array('@field_name' => $cf['widget']['label'])),
+        '#description' => t('If a DataExtRet field is selected, use this to select the field with a name of this fields\'s value'),
+        '#default_value' => isset($values[$cf['field_name'].'_data_ext_name']) ? $values[$cf['field_name'].'_data_ext_name'] : '',
+      );
+    }
+    // Select the related qdid for fields that reference other content types
+    if ($cf['type'] == 'nodereference') {
+      $form[$cf['field_name'].'_qdid'] = array(
+        '#type' => 'select',
+        '#title' => t('Related Quickbooks Data Mapping to use for \'@field_name\'', array('@field_name' => $cf['widget']['label'])),
+        '#options' => _qb_field_create_nodereference_qdid_options($field, $cf['field_name']),
+        '#description' => t('The item selected here is used to find the nid to place in the nodereference field. If no options are available here you need to set up a QuickBooks data mapping to another area of the site (commonly a CCK type).'),
+        '#default_value' => isset($values[$cf['field_name'].'_qdid']) ? $values[$cf['field_name'].'_qdid'] : '',
+      );
+
+      $form[$cf['field_name'].'_filter'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Fitler the results returned by Quickbooks to items associated with the above selected Data Mapping?'),
+        '#description' => t('Some datasets in Quickbooks can be very large and sometimes a dataset needs to be filtered down to only "active" or related items. Enabling this option will filter the results of this Quickbooks query to items related to the above selected Data Mapping.'),
+        '#default_value' => isset($values[$cf['field_name'].'_filter']) ? $values[$cf['field_name'].'_filter'] : '0',
+      );
+    }
   }
 
   return $form;
+}
+ 
+function _qb_field_create_nodereference_qdid_options($field) {
+	$options = array();
+  $sql = "SELECT qb_data.* FROM qb_data;";
+  $result = db_query($sql);
+  
+  while($qb_data = db_fetch_array($result)) {
+    $options[$qb_data['qdid']] = $qb_data['title'];
+  }
+
+	return $options;
+}
+/**
+ * Creates a Drupal form API field grouping of the available mappings,
+ * Calls itself recursively for any $qb_info that does not have a 'type' key.
+ */
+function _qb_field_map_form_options($qb_data, $parents = array()) {
+  $qb_fields = array();
+  foreach ($qb_data as $qb_key => $qb_info) {
+    if (!is_string($qb_key)) continue;
+    if (substr($qb_key, -4) == 'Core') continue; // ListCore, TxnCore, etc.
+    if (in_array($qb_key, array('FullName'))) continue; 
+
+    if (is_array($qb_info)) {
+      foreach(array_keys($qb_info) as $key) {
+        //Skip over the "List" container arrays as they're not replicated when the data is finally pushed.
+        if (substr($key, -7) == 'ListRef' || substr($key, -4) == 'Data') { 
+          $qb_info = $qb_info[$key];
+          break;
+        }
+      }
+    }
+      
+    // "Ref" fields require recursion and grouping for proper selection.
+    if (is_array($qb_info) && !array_key_exists('type',$qb_info)) { 
+      $new_parents = array_merge($parents,array($qb_key));
+      $child_options = _qb_field_map_form_options($qb_info, $new_parents);
+      $qb_fields = array_merge_recursive($qb_fields, $child_options); 
+    }
+
+    else {
+      $label = preg_replace('/([A-Z]+)/', ' \1', $qb_key);
+      $type = _qb_field_map_field($qb_info);
+      $key = array_merge($parents,array($qb_key));
+      $qb_fields[$type][implode(' ',$parents)][implode('.',$key)] = $label;
+      //TODO get import to load this field's data
+    }
+  }
+
+  foreach ($qb_fields as $type => $items) {
+    asort($items);
+    //$qb_fields[$type] = array_merge(array('' => t('Quickbooks field')), $items);
+  }
+
+  return $qb_fields;
 }
 
 function _qb_field_map_field($qb_info) {
@@ -375,11 +659,15 @@ function _qb_field_map_field($qb_info) {
     switch ($qb_info['type']) {
       case 'STRTYPE':
       case 'ENUMTYPE':
+      case 'BOOLTYPE':
         $field_type = 'text';
         break;
 
       case 'AMTTYPE':
       case 'PRICETYPE':
+        $field_type = 'number_decimal';
+        break;
+
       case 'FLOATTYPE':
       case 'QUANTYPE':
       case 'PERCENTTYPE':
@@ -387,16 +675,22 @@ function _qb_field_map_field($qb_info) {
         break;
 
       case 'INTTYPE':
-      case 'BOOLTYPE':
         $field_type = 'number_integer';
         break;
 
       case 'DATETYPE':
+        $field_type = 'date';
+        break;
+
       case 'DATETIMETYPE':
+        $field_type = 'datetime';
+        break;
+
+      case 'IDTYPE':
+        $field_type = 'nodereference';
         break;
     }
   /* Not addressing:
-    IDTYPE -- nodereference?
     TIMEINTERVALTYPE
     GUIDTYPE
     UUIDTYPE
@@ -407,10 +701,12 @@ function _qb_field_map_field($qb_info) {
 }
 
 function _qb_field_node_load($field, $value) {
-  $db_info = content_database_info($fields);
+  $db_info = content_database_info($field);
   $nid = db_result(db_query("SELECT nid FROM {". $db_info['table'] ."}
     WHERE %s = %d", $field['field_name'] .'_qdvid', $value->qdvid));
-
+  if (!$nid) {
+    return false;
+  }
   return node_load($nid);
 }
 
